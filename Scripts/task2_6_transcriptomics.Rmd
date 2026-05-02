@@ -72,7 +72,8 @@ url <- paste0(
   "1a507c4c3f9f1baaa3a69187223ff3d3050628d4/results.txt"
 )
 
-rnaseq <- read.table(url, header = TRUE, stringsAsFactors = FALSE)
+Raw_rnaseq <- read.table(url, header = TRUE, stringsAsFactors = FALSE)
+rnaseq <- Raw_rnaseq # always conserve the Raw data 
 
 # ── Quick overview ───────────────────────────────────────────
 cat("=== Dataset Dimensions ===\n")
@@ -88,14 +89,18 @@ cat("\n=== Summary Statistics ===\n")
 summary(rnaseq)
 
 cat("\n=== Missing Values per Column ===\n")
-colSums(is.na(rnaseq))
+colSums(is.na(rnaseq)) # no misisng values in this dataset
+
+# save raw data in the computer
+write.csv(rnaseq, "Raw_rnaseq.csv", row.names = FALSE)
+
 ```
 
 > **What we observe:**
 > The dataset contains expression statistics for thousands of genes.
 > `log2FoldChange` ranges from large negative (strongly downregulated)
 > to large positive (strongly upregulated) values.
-> Some genes have `NA` in pvalue — these are genes with very low counts
+> If we have genes with `NA` in pvalue — these are genes with very low counts
 > where DESeq2 could not compute reliable statistics. We will remove them
 > before analysis.
 
@@ -109,7 +114,7 @@ colSums(is.na(rnaseq))
 rnaseq_clean <- rnaseq %>%
   filter(!is.na(pvalue), !is.na(log2FoldChange))
 
-cat(sprintf("Genes before cleaning : %d\n", nrow(rnaseq)))
+cat(sprintf("Genes before cleaning : %d\n", nrow(rnaseq))) # there are no genes with NA values
 cat(sprintf("Genes after cleaning  : %d\n", nrow(rnaseq_clean)))
 
 # ── Add a -log10(pvalue) column ──────────────────────────────
@@ -128,7 +133,7 @@ rnaseq_clean <- rnaseq_clean %>%
   mutate(Expression = case_when(
     log2FoldChange >  1 & pvalue < 0.01 ~ "Upregulated",
     log2FoldChange < -1 & pvalue < 0.01 ~ "Downregulated",
-    TRUE                                 ~ "Not Significant"
+    TRUE                                 ~ "Not Significant" # considering the criteria from the exercice
   ))
 
 # ── Count each category ──────────────────────────────────────
@@ -159,15 +164,19 @@ top_up <- rnaseq_clean %>%
   filter(Expression == "Upregulated") %>%
   arrange(desc(log2FoldChange)) %>%
   head(5)
+top_up
 
 # Top 5 downregulated (lowest/most negative Log2FC among significant)
 top_down <- rnaseq_clean %>%
   filter(Expression == "Downregulated") %>%
   arrange(log2FoldChange) %>%
   head(5)
+top_down
+
 
 # Combine for labeling
 top_genes <- bind_rows(top_up, top_down)
+top_genes
 
 # ── Build the volcano plot ───────────────────────────────────
 volcano_plot <- ggplot(rnaseq_clean,
@@ -235,6 +244,9 @@ volcano_plot <- ggplot(rnaseq_clean,
 
 print(volcano_plot)
 
+ggsave("Volcano.png", width = 12, height = 8, dpi = 150)
+cat("✔ Saved: Volcano Plot.png\n")
+
 # ── OBSERVATION ──────────────────────────────────────────────
 # The volcano plot shows a clear separation between:
 # - Upregulated genes (top-right): these are ACTIVATED by Compound X treatment
@@ -257,7 +269,7 @@ print(volcano_plot)
 upregulated <- rnaseq_clean %>%
   filter(Expression == "Upregulated") %>%
   arrange(desc(log2FoldChange)) %>%
-  select(Gene, log2FoldChange, pvalue, padj, baseMean)
+  select(Gene, log2FoldChange, pvalue, padj, neg_log10_pval)
 
 cat(sprintf("Total upregulated genes: %d\n\n", nrow(upregulated)))
 
@@ -285,7 +297,7 @@ print(head(upregulated, 5))
 downregulated <- rnaseq_clean %>%
   filter(Expression == "Downregulated") %>%
   arrange(log2FoldChange) %>%       # most negative first
-  select(Gene, log2FoldChange, pvalue, padj, baseMean)
+  select(Gene, log2FoldChange, pvalue, padj, neg_log10_pval)
 
 cat(sprintf("Total downregulated genes: %d\n\n", nrow(downregulated)))
 
@@ -326,7 +338,7 @@ top 5 upregulated genes:
 - **Relevance:** Upregulation of DTHD1 by Compound X suggests the treatment
   may be **re-activating apoptotic pathways** in diseased cells — a key mechanism
   in cancer therapy where diseased cells evade normal cell death.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=DTHD1
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=DTHD1>
 
 ---
 
@@ -342,51 +354,30 @@ top 5 upregulated genes:
   - **Tumour suppression** — reduced expression is observed in several cancers
 - **Relevance:** Upregulation suggests Compound X may be **restoring tumour
   suppressive ECM signalling** and **pro-apoptotic signals** in diseased cells.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=EMILIN2
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=EMILIN2>
 
 ---
 
-### 3. `ACTC1` — Actin Alpha Cardiac Muscle 1
+### 3. `PI16` - Peptidaase Inhibitor 16
 
-- **Full name:** Actin, Alpha Cardiac Muscle 1
-- **Function:** Encodes the **alpha-cardiac actin** isoform — a core structural
-  protein of the **sarcomere** (the contractile unit of cardiac and skeletal muscle).
-  Key roles include:
-  - **Muscle contraction** — forms thin filaments that interact with myosin
-  - **Cardiac development** — expressed during heart morphogenesis
-  - **Disease relevance:** Mutations cause **hypertrophic cardiomyopathy** and
-    **dilated cardiomyopathy**
-- **Relevance:** Upregulation in this context may indicate Compound X
-  **stimulates muscle repair or cytoskeletal reorganisation** in the diseased cells.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=ACTC1
+- **Full name:** Peptidase Inhibitor 16
+- **Function:** Predicted to enable peptidase inhibitor activity. Predicted to act upstream of or within negative regulation of cell growth involved in cardiac muscle cell development. Predicted to be located in extracellular region. Predicted to be active in extracellular space
+- **Genecards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=PI16>
+---
+
+### 4. `C4orf45` - Gene - Sperm Microtubule Inner Protein 2
+
+-**Full name:** Gene - Sperm Microtubule Inner Protein 2
+- **Functions:** PMIP2 (Sperm Microtubule Inner Protein 2) is a Protein Coding gene. Diseases associated with SPMIP2 include Hyperekplexia
+- **Genecards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=SPMIP2>
 
 ---
 
-### 4. `LOC100130155` — Uncharacterised Locus
+### 5. `FAM180B` — Family With Sequence Similarity 180 Member B
 
-- **Full name:** Uncharacterised locus / predicted gene
-- **Function:** This is a **predicted/uncharacterized open reading frame** with
-  no confirmed protein function at the time of the original study. It may encode:
-  - A **long non-coding RNA (lncRNA)**
-  - A **novel protein** with functions yet to be experimentally validated
-- **Relevance:** Its significant upregulation suggests it may play an
-  **undiscovered regulatory role** in the cellular response to Compound X.
-  Such loci are active areas of functional genomics research.
-
----
-
-### 5. `SPDYE7P` — Speedy/RINGO Cell Cycle Regulator Family Member E7, Pseudogene
-
-- **Full name:** Speedy/RINGO Cell Cycle Regulator Family Member E7, Pseudogene
-- **Function:** This is a **pseudogene** derived from the Speedy/RINGO family,
-  which normally functions as:
-  - **Cell cycle regulators** — activate CDK (cyclin-dependent kinase) complexes
-    independently of cyclins
-  - **Accelerators of G1/S and G2/M transitions** in the cell cycle
-  - Although classified as a pseudogene, recent evidence shows some pseudogenes
-    produce **functional RNAs** that regulate expression of parent genes
-- **Relevance:** Its upregulation may reflect **Compound X modulating cell cycle
-  progression** in the diseased cell line.
+- **Full name:** Family With Sequence Similarity 180 Member B
+- **Function:** Predicted to be located in extracellular region. FAM180B (Family With Sequence Similarity 180 Member B) is a Protein Coding gene. Diseases associated with FAM180B include Borderline Leprosy and Mosaic Variegated Aneuploidy Syndrome.
+-**Genecards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=FAM180B>
 
 ---
 
@@ -404,83 +395,44 @@ top 5 downregulated genes:
 
 ---
 
-### 1. `CRISPLD2` — Cysteine Rich Secretory Protein LCCL Domain Containing 2
+### 1. `TBX5` - T-Box Transcription Factor 
 
-- **Full name:** Cysteine Rich Secretory Protein LCCL Domain Containing 2
-- **Function:** Encodes a secreted extracellular matrix protein involved in:
-  - **Lipopolysaccharide (LPS) binding** — neutralises bacterial endotoxins
-  - **Anti-inflammatory regulation** — suppresses inflammatory cytokine production
-  - **Palate and craniofacial development** — linked to cleft palate
-  - **Lung development** — expressed in airway smooth muscle
-- **Relevance:** Downregulation by Compound X may indicate **reduction of
-  inflammatory signalling components** in the diseased cell line.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=CRISPLD2
+- **Full name:** T-Box Transcription Factor 
+- **Function:** This gene is a member of a phylogenetically conserved family of genes that share a common DNA-binding domain, the T-box. T-box genes encode transcription factors involved in the regulation of developmental processes. This gene is closely linked to related family member T-box 3 (ulnar mammary syndrome) on human chromosome 12. The encoded protein may play a role in heart development and specification of limb identity. Mutations in this gene have been associated with Holt-Oram syndrome, a developmental disorder affecting the heart and upper limbs. Several transcript variants encoding different isoforms have been described for this gene.
+- **Genecards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=TBX5#summaries>
 
 ---
 
-### 2. `MXRA5` — Matrix Remodelling Associated 5
+### 2. `IFITM1` — Interferon Induced Transmembrane Protein 1 
 
-- **Full name:** Matrix Remodelling Associated Protein 5
-- **Function:** A secreted glycoprotein involved in:
-  - **Extracellular matrix (ECM) remodelling** — regulates cell adhesion
-  - **Tumour progression** — overexpressed in glioma and associated with
-    **poor prognosis**, immune checkpoint upregulation, and macrophage infiltration
-  - **Mesenchymal transition** — marker of the mesenchymal subtype of GBM
-- **Relevance:** Downregulation is a **positive therapeutic signal** — Compound X
-  may be **suppressing tumour-promoting ECM remodelling** and reducing
-  the immunosuppressive tumour microenvironment.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=MXRA5
+- **Fullname:** Interferon Induced Transmembrane Protein 1 
+- **Functions:** nterferon-induced transmembrane (IFITM) proteins are a family of interferon induced antiviral proteins. The family contains five members, including IFITM1, IFITM2 and IFITM3 that belong to the CD225 superfamily. The protein encoded by this gene restricts cellular entry by diverse viral pathogens, such as influenza A virus, Ebola virus and Sars-CoV-2
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=IFITM1#summaries>
 
 ---
 
-### 3. `ITGBL1` — Integrin Subunit Beta Like 1
+### 3. `TNN` — Tenascin N
 
-- **Full name:** Integrin Beta-Like Protein 1
-- **Function:** A protein structurally related to integrin beta subunits that:
-  - **Modulates integrin-mediated cell adhesion** to ECM components
-  - **Promotes cancer metastasis** — upregulated in colorectal and ovarian cancers,
-    facilitates epithelial-mesenchymal transition (EMT)
-  - **Activates TGF-β signalling** — a key pro-fibrotic and pro-tumour pathway
-  - **Inhibits Wnt signalling** in some contexts
-- **Relevance:** Its downregulation suggests Compound X may be
-  **reducing cancer cell invasion and metastatic potential** by disrupting
-  integrin-mediated adhesion signalling.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=ITGBL1
+- **Full name:** Tenascin N 
+- **Functions:** Predicted to enable integrin binding activity. Involved in positive regulation of sprouting angiogenesis; regulation of cell adhesion; and regulation of cell migration. Located in collagen-containing extracellular matrix. Part of tenascin complex.
+Extracellular matrix protein that seems to be a ligand for ITGA8:ITGB1, ITGAV:ITGB1 and ITGA4:ITGB1 (By similarity) (. Involved in neurite outgrowth and cell migration in hippocampal explants (By similarity). During endochondral bone formation, inhibits proliferation and differentiation of proteoblasts mediated by canonical WNT signaling (By similarity). In tumors, stimulates angiogenesis by elongation, migration and sprouting of endothelial cells. Expressed in most mammary tumors, may facilitate tumorigenesis by supporting the migratory behavior of breast cancer cells 
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=TNN#summaries>
 
 ---
 
-### 4. `HBB` — Haemoglobin Subunit Beta
+### 4. `COL13A1` — Collagen Type XIII Alpha 1 Chain
 
-- **Full name:** Haemoglobin Subunit Beta (Beta-Globin)
-- **Function:** Encodes the **beta chain of adult haemoglobin**, the
-  oxygen-carrying protein in red blood cells. Key roles:
-  - **Oxygen transport** — binds O₂ cooperatively in a tetrameric complex
-    with alpha-globin subunits
-  - **Disease relevance:** Mutations cause **sickle cell anaemia** (HbS),
-    **beta-thalassaemia**, and other haemoglobinopathies
-  - Also expressed at low levels in non-erythroid tissues where it may
-    function in **oxidative stress protection**
-- **Relevance:** HBB downregulation in a diseased cell line context may
-  indicate **altered oxygen metabolism or haem biosynthesis** in cells
-  responding to Compound X.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=HBB
+- **Full name:** Collagen Type XIII Alpha 1 Chain
+- **Functions:** This gene encodes the alpha chain of one of the nonfibrillar collagens. The function of this gene product is not known, however, it has been detected at low levels in all connective tissue-producing cells so it may serve a general function in connective tissues. Unlike most of the collagens, which are secreted into the extracellular matrix, collagen XIII contains a transmembrane domain and the protein has been localized to the plasma membrane. The transcripts for this gene undergo complex and extensive splicing involving at least eight exons. Like other collagens, collagen XIII is a trimer; it is not known whether this trimer is composed of one or more than one alpha chain isomer. A number of alternatively spliced transcript variants have been described, but the full length nature of some of them has not been determined
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=COL13A1#summaries>
 
 ---
 
-### 5. `APCDD1L` — APC Down-Regulated 1 Like
+### 5. `IFITM3` — Interferon Induced Transmembrane Protein 3 
 
-- **Full name:** Adenomatous Polyposis Coli Down-Regulated 1 Like
-- **Function:** A transmembrane protein that:
-  - **Inhibits the Wnt signalling pathway** — by promoting degradation of
-    Wnt pathway components
-  - **Regulates hair follicle development** — mutations cause
-    Hereditary Hypotrichosis Simplex (hair loss disorder)
-  - **Tumour suppressor activity** — downregulated in colorectal cancers
-    where Wnt signalling is hyperactivated
-- **Relevance:** Downregulation of APCDD1L appears counterintuitive for a
-  tumour suppressor, but may reflect **cell-type-specific Wnt pathway
-  rebalancing** as part of Compound X's mechanism of action.
-- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=APCDD1L
+- **Full name:** Interferon Induced Transmembrane Protein 3 
+- **Functions:** Interferon-induced transmembrane (IFITM) proteins are a family of interferon induced antiviral proteins. The family contains five members, including IFITM1, IFITM2 and IFITM3 and belong to the CD225 superfamily. The protein encoded by this gene restricts cellular entry by diverse viral pathogens, such as influenza A virus, Ebola virus and Sars-CoV-2. 
+- **GeneCards:** <https://www.genecards.org/cgi-bin/carddisp.pl?gene=IFITM3#summaries>
 
 ---
 
@@ -513,7 +465,8 @@ print(head(downregulated %>%
 
 ```{r enhanced-volcano, fig.height=9}
 # ── Final enhanced volcano with both up and down top genes ───
-ggplot(rnaseq_clean,
+Volcano_plot_2 <-
+  ggplot(rnaseq_clean,
        aes(x     = log2FoldChange,
            y     = neg_log10_pval,
            color = Expression)) +
@@ -568,26 +521,15 @@ ggplot(rnaseq_clean,
     legend.position  = "bottom",
     panel.grid.minor = element_blank()
   )
+
+Volcano_plot_2
+
+ggsave("Volcano1.png", width = 12, height = 8, dpi = 150)
+cat("✔ Saved: Volcano Plot.png\n")
+
 ```
 
 ---
-
-# 12. Overall Biological Conclusions
-
-> **Upregulated genes** — Compound X activates genes involved in:
-> - **Apoptosis** (`DTHD1`, `EMILIN2`) → the treatment is re-enabling
->   programmed cell death in diseased cells that had evaded it
-> - **Structural remodelling** (`ACTC1`) → cytoskeletal reorganisation
->   as part of the cellular response
-> - **Cell cycle regulation** (`SPDYE7P`) → potential modulation of
->   proliferative capacity
-
-> **Downregulated genes** — Compound X suppresses genes involved in:
-> - **Tumour ECM remodelling** (`MXRA5`, `ITGBL1`) → reduced invasion
->   and metastatic potential
-> - **Inflammation** (`CRISPLD2`) → dampening of inflammatory signalling
-> - **Wnt pathway** (`APCDD1L`) → pathway rebalancing in treated cells
-> - **Oxygen metabolism** (`HBB`) → altered metabolic state
 
 > **Overall conclusion:**
 > Compound X appears to act through a **dual mechanism** — simultaneously
@@ -598,4 +540,4 @@ ggplot(rnaseq_clean,
 
 ---
 
-*End of Task 2.6 — Transcriptomics RNA-seq Differential Expression Analysis*
+*End of Task — Transcriptomics RNA-seq Differential Expression Analysis*
