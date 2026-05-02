@@ -1,0 +1,601 @@
+---
+title: "Task Transcriptomics: RNA-seq Differential Expression Analysis"
+author: "HackBio Internship"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+# Global chunk options for all code chunks
+knitr::opts_chunk$set(
+  echo    = TRUE,     # show code in rendered output
+  message = FALSE,    # suppress package loading messages
+  warning = FALSE,    # suppress warnings
+  fig.width  = 10,
+  fig.height = 7
+)
+```
+
+---
+
+# 1. Background
+
+This analysis uses a processed RNA-seq dataset comparing a **diseased cell line**
+against a **diseased cell line treated with Compound X**. The key metrics are:
+
+- **Log2FoldChange (Log2FC):** the magnitude of expression change between conditions.
+  Positive = upregulated in treated; Negative = downregulated in treated.
+- **p-value:** the statistical significance of the observed change.
+
+**Thresholds used:**
+
+| Direction      | Log2FC threshold | p-value threshold |
+|----------------|-----------------|-------------------|
+| Upregulated    | > 1             | < 0.01            |
+| Downregulated  | < −1            | < 0.01            |
+| Not significant| between −1 & 1  | ≥ 0.01            |
+
+---
+
+# 2. Load Packages
+
+```{r packages}
+# pacman auto-installs any missing package before loading
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+  tidyverse,   # dplyr (data wrangling) + ggplot2 (visualization)
+  ggplot2,     # explicit load for clarity
+  ggrepel,     # smart non-overlapping gene labels on volcano plot
+  scales       # axis formatting
+)
+```
+
+---
+
+# 3. Load & Inspect the Dataset
+
+```{r load-data}
+# ── Load the RNA-seq results from GitHub Gist ────────────────
+# Dataset: DESeq2 output — diseased vs diseased + Compound X
+# Columns: Gene, baseMean, log2FoldChange, lfcSE, stat, pvalue, padj
+
+url <- paste0(
+  "https://gist.githubusercontent.com/stephenturner/",
+  "806e31fce55a8b7175af/raw/",
+  "1a507c4c3f9f1baaa3a69187223ff3d3050628d4/results.txt"
+)
+
+rnaseq <- read.table(url, header = TRUE, stringsAsFactors = FALSE)
+
+# ── Quick overview ───────────────────────────────────────────
+cat("=== Dataset Dimensions ===\n")
+dim(rnaseq)                    # rows = genes, cols = metrics
+
+cat("\n=== Column Names ===\n")
+names(rnaseq)
+
+cat("\n=== First Rows ===\n")
+head(rnaseq)
+
+cat("\n=== Summary Statistics ===\n")
+summary(rnaseq)
+
+cat("\n=== Missing Values per Column ===\n")
+colSums(is.na(rnaseq))
+```
+
+> **What we observe:**
+> The dataset contains expression statistics for thousands of genes.
+> `log2FoldChange` ranges from large negative (strongly downregulated)
+> to large positive (strongly upregulated) values.
+> Some genes have `NA` in pvalue — these are genes with very low counts
+> where DESeq2 could not compute reliable statistics. We will remove them
+> before analysis.
+
+---
+
+# 4. Data Cleaning & Preparation
+
+```{r data-prep}
+# ── Remove rows with NA in pvalue or log2FoldChange ──────────
+# NA values arise from genes with very low/zero counts in DESeq2
+rnaseq_clean <- rnaseq %>%
+  filter(!is.na(pvalue), !is.na(log2FoldChange))
+
+cat(sprintf("Genes before cleaning : %d\n", nrow(rnaseq)))
+cat(sprintf("Genes after cleaning  : %d\n", nrow(rnaseq_clean)))
+
+# ── Add a -log10(pvalue) column ──────────────────────────────
+# Volcano plots use -log10(pvalue) on the Y axis so that
+# MORE significant genes appear HIGHER on the plot
+rnaseq_clean <- rnaseq_clean %>%
+  mutate(neg_log10_pval = -log10(pvalue))
+
+# ── Classify each gene by expression status ──────────────────
+# Using the task criteria:
+#   Upregulated   : Log2FC >  1  AND pvalue < 0.01
+#   Downregulated : Log2FC < -1  AND pvalue < 0.01
+#   Not Significant: everything else
+
+rnaseq_clean <- rnaseq_clean %>%
+  mutate(Expression = case_when(
+    log2FoldChange >  1 & pvalue < 0.01 ~ "Upregulated",
+    log2FoldChange < -1 & pvalue < 0.01 ~ "Downregulated",
+    TRUE                                 ~ "Not Significant"
+  ))
+
+# ── Count each category ──────────────────────────────────────
+cat("\n=== Gene Expression Categories ===\n")
+table(rnaseq_clean$Expression)
+```
+
+---
+
+# 5. Volcano Plot
+
+```{r volcano-plot, fig.height=8}
+# ── What is a Volcano Plot? ──────────────────────────────────
+# A volcano plot visualises differential expression by plotting:
+#   X axis → Log2FoldChange (effect size: how much expression changed)
+#   Y axis → -log10(pvalue) (significance: how confident we are)
+#
+# Genes appear as points:
+#   TOP RIGHT   → highly significant AND strongly upregulated
+#   TOP LEFT    → highly significant AND strongly downregulated
+#   BOTTOM/CENTER → not significant or small fold change
+#
+# The "volcano" shape emerges from the V-like spread of points.
+
+# ── Select top genes to label ────────────────────────────────
+# Top 5 upregulated (highest Log2FC among significant)
+top_up <- rnaseq_clean %>%
+  filter(Expression == "Upregulated") %>%
+  arrange(desc(log2FoldChange)) %>%
+  head(5)
+
+# Top 5 downregulated (lowest/most negative Log2FC among significant)
+top_down <- rnaseq_clean %>%
+  filter(Expression == "Downregulated") %>%
+  arrange(log2FoldChange) %>%
+  head(5)
+
+# Combine for labeling
+top_genes <- bind_rows(top_up, top_down)
+
+# ── Build the volcano plot ───────────────────────────────────
+volcano_plot <- ggplot(rnaseq_clean,
+                       aes(x     = log2FoldChange,
+                           y     = neg_log10_pval,
+                           color = Expression)) +
+
+  # All gene points
+  geom_point(alpha = 0.5, size = 1.5) +
+
+  # Threshold lines
+  geom_vline(xintercept = c(-1, 1),
+             linetype = "dashed", color = "grey30", linewidth = 0.7) +
+  geom_hline(yintercept = -log10(0.01),
+             linetype = "dashed", color = "grey30", linewidth = 0.7) +
+
+  # Gene labels for top hits — ggrepel avoids overlapping text
+  ggrepel::geom_label_repel(
+    data          = top_genes,
+    aes(label     = Gene),
+    size          = 3.2,
+    fontface      = "bold",
+    box.padding   = 0.4,
+    point.padding = 0.3,
+    max.overlaps  = 20,
+    show.legend   = FALSE
+  ) +
+
+  # Color scheme: red = up, blue = down, grey = not significant
+  scale_color_manual(
+    values = c(
+      "Upregulated"     = "#B71C1C",
+      "Downregulated"   = "#1565C0",
+      "Not Significant" = "grey60"
+    )
+  ) +
+
+  # Axis labels and title
+  labs(
+    title    = "Volcano Plot — Differential Gene Expression",
+    subtitle = "Diseased Cell Line vs Diseased + Compound X Treatment",
+    x        = "Log₂ Fold Change  (←  Downregulated  |  Upregulated  →)",
+    y        = "-log₁₀(p-value)  [higher = more significant]",
+    color    = "Expression Status",
+    caption  = paste0(
+      "Thresholds: |Log2FC| > 1 and p-value < 0.01\n",
+      "Source: Turner (2015) RNA-seq results via GitHub Gist"
+    )
+  ) +
+
+  # Annotate quadrant counts
+  annotate("text", x =  max(rnaseq_clean$log2FoldChange) * 0.8,
+           y = max(rnaseq_clean$neg_log10_pval) * 0.95,
+           label = paste0("Up: ", nrow(top_up %>%
+                            {rnaseq_clean[rnaseq_clean$Expression=="Upregulated",]})),
+           color = "#B71C1C", fontface = "bold", size = 4) +
+
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 15),
+    plot.subtitle   = element_text(color = "grey50", size = 11),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+print(volcano_plot)
+
+# ── OBSERVATION ──────────────────────────────────────────────
+# The volcano plot shows a clear separation between:
+# - Upregulated genes (top-right): these are ACTIVATED by Compound X treatment
+# - Downregulated genes (top-left): these are SUPPRESSED by Compound X treatment
+# - The bulk of genes cluster near the centre/bottom: no meaningful change
+# The shape resembles a volcano because most genes are not significant
+# (low -log10 p-value) and only a subset show both large fold change
+# AND high significance simultaneously.
+```
+
+---
+
+# 6. Upregulated Genes (Log2FC > 1 and p-value < 0.01)
+
+```{r upregulated}
+# ── Filter upregulated genes ─────────────────────────────────
+# These genes are MORE expressed in the treated condition
+# → Compound X activates or induces their expression
+
+upregulated <- rnaseq_clean %>%
+  filter(Expression == "Upregulated") %>%
+  arrange(desc(log2FoldChange)) %>%
+  select(Gene, log2FoldChange, pvalue, padj, baseMean)
+
+cat(sprintf("Total upregulated genes: %d\n\n", nrow(upregulated)))
+
+# ── Top 5 most upregulated genes ─────────────────────────────
+cat("=== TOP 5 UPREGULATED GENES ===\n")
+print(head(upregulated, 5))
+```
+
+> **Interpretation:**
+> Upregulated genes are those **switched ON** (or increased) in response to
+> Compound X treatment in the diseased cell line. A Log2FC > 1 means
+> expression at least **doubled** (2¹ = 2-fold increase) in treated cells.
+> These genes may represent the compound's mechanism of therapeutic action —
+> pathways it activates to counteract the disease state.
+
+---
+
+# 7. Downregulated Genes (Log2FC < -1 and p-value < 0.01)
+
+```{r downregulated}
+# ── Filter downregulated genes ───────────────────────────────
+# These genes are LESS expressed in the treated condition
+# → Compound X suppresses or silences their expression
+
+downregulated <- rnaseq_clean %>%
+  filter(Expression == "Downregulated") %>%
+  arrange(log2FoldChange) %>%       # most negative first
+  select(Gene, log2FoldChange, pvalue, padj, baseMean)
+
+cat(sprintf("Total downregulated genes: %d\n\n", nrow(downregulated)))
+
+# ── Top 5 most downregulated genes ───────────────────────────
+cat("=== TOP 5 DOWNREGULATED GENES ===\n")
+print(head(downregulated, 5))
+```
+
+> **Interpretation:**
+> Downregulated genes are those **switched OFF** (or reduced) by Compound X.
+> A Log2FC < −1 means expression at least **halved** (2⁻¹ = 2-fold decrease).
+> These genes may represent disease-promoting pathways that Compound X
+> successfully suppresses — making them strong candidates for therapeutic targets.
+
+---
+
+# 8. Function of Top 5 Upregulated Genes (from GeneCards)
+
+```{r top-upregulated-functions}
+# ── Store the top 5 upregulated gene names ───────────────────
+top5_up <- head(upregulated$Gene, 5)
+cat("Top 5 upregulated genes:\n")
+print(top5_up)
+```
+
+Based on [GeneCards](https://www.genecards.org), here are the functions of the
+top 5 upregulated genes:
+
+---
+
+### 1. `DTHD1` — Death Domain Containing 1
+
+- **Full name:** Death Domain Containing 1
+- **Function:** Encodes a protein containing a **death domain** — a protein
+  interaction motif involved in **apoptosis (programmed cell death)** signalling.
+  Death domain proteins participate in the assembly of signalling complexes that
+  activate caspase cascades leading to cell death.
+- **Relevance:** Upregulation of DTHD1 by Compound X suggests the treatment
+  may be **re-activating apoptotic pathways** in diseased cells — a key mechanism
+  in cancer therapy where diseased cells evade normal cell death.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=DTHD1
+
+---
+
+### 2. `EMILIN2` — Elastin Microfibril Interfacer 2
+
+- **Full name:** Elastin Microfibril Interface Located Protein 2
+- **Function:** A secreted glycoprotein of the **extracellular matrix (ECM)**
+  that plays roles in:
+  - **Elastic fibre assembly** — structural component of connective tissue
+  - **Apoptosis regulation** — EMILIN2 activates the extrinsic apoptotic
+    pathway via caspase-8 and caspase-3
+  - **Angiogenesis inhibition** — suppresses tumour vascularisation
+  - **Tumour suppression** — reduced expression is observed in several cancers
+- **Relevance:** Upregulation suggests Compound X may be **restoring tumour
+  suppressive ECM signalling** and **pro-apoptotic signals** in diseased cells.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=EMILIN2
+
+---
+
+### 3. `ACTC1` — Actin Alpha Cardiac Muscle 1
+
+- **Full name:** Actin, Alpha Cardiac Muscle 1
+- **Function:** Encodes the **alpha-cardiac actin** isoform — a core structural
+  protein of the **sarcomere** (the contractile unit of cardiac and skeletal muscle).
+  Key roles include:
+  - **Muscle contraction** — forms thin filaments that interact with myosin
+  - **Cardiac development** — expressed during heart morphogenesis
+  - **Disease relevance:** Mutations cause **hypertrophic cardiomyopathy** and
+    **dilated cardiomyopathy**
+- **Relevance:** Upregulation in this context may indicate Compound X
+  **stimulates muscle repair or cytoskeletal reorganisation** in the diseased cells.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=ACTC1
+
+---
+
+### 4. `LOC100130155` — Uncharacterised Locus
+
+- **Full name:** Uncharacterised locus / predicted gene
+- **Function:** This is a **predicted/uncharacterized open reading frame** with
+  no confirmed protein function at the time of the original study. It may encode:
+  - A **long non-coding RNA (lncRNA)**
+  - A **novel protein** with functions yet to be experimentally validated
+- **Relevance:** Its significant upregulation suggests it may play an
+  **undiscovered regulatory role** in the cellular response to Compound X.
+  Such loci are active areas of functional genomics research.
+
+---
+
+### 5. `SPDYE7P` — Speedy/RINGO Cell Cycle Regulator Family Member E7, Pseudogene
+
+- **Full name:** Speedy/RINGO Cell Cycle Regulator Family Member E7, Pseudogene
+- **Function:** This is a **pseudogene** derived from the Speedy/RINGO family,
+  which normally functions as:
+  - **Cell cycle regulators** — activate CDK (cyclin-dependent kinase) complexes
+    independently of cyclins
+  - **Accelerators of G1/S and G2/M transitions** in the cell cycle
+  - Although classified as a pseudogene, recent evidence shows some pseudogenes
+    produce **functional RNAs** that regulate expression of parent genes
+- **Relevance:** Its upregulation may reflect **Compound X modulating cell cycle
+  progression** in the diseased cell line.
+
+---
+
+# 9. Function of Top 5 Downregulated Genes (from GeneCards)
+
+```{r top-downregulated-functions}
+# ── Store the top 5 downregulated gene names ─────────────────
+top5_down <- head(downregulated$Gene, 5)
+cat("Top 5 downregulated genes:\n")
+print(top5_down)
+```
+
+Based on [GeneCards](https://www.genecards.org), here are the functions of the
+top 5 downregulated genes:
+
+---
+
+### 1. `CRISPLD2` — Cysteine Rich Secretory Protein LCCL Domain Containing 2
+
+- **Full name:** Cysteine Rich Secretory Protein LCCL Domain Containing 2
+- **Function:** Encodes a secreted extracellular matrix protein involved in:
+  - **Lipopolysaccharide (LPS) binding** — neutralises bacterial endotoxins
+  - **Anti-inflammatory regulation** — suppresses inflammatory cytokine production
+  - **Palate and craniofacial development** — linked to cleft palate
+  - **Lung development** — expressed in airway smooth muscle
+- **Relevance:** Downregulation by Compound X may indicate **reduction of
+  inflammatory signalling components** in the diseased cell line.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=CRISPLD2
+
+---
+
+### 2. `MXRA5` — Matrix Remodelling Associated 5
+
+- **Full name:** Matrix Remodelling Associated Protein 5
+- **Function:** A secreted glycoprotein involved in:
+  - **Extracellular matrix (ECM) remodelling** — regulates cell adhesion
+  - **Tumour progression** — overexpressed in glioma and associated with
+    **poor prognosis**, immune checkpoint upregulation, and macrophage infiltration
+  - **Mesenchymal transition** — marker of the mesenchymal subtype of GBM
+- **Relevance:** Downregulation is a **positive therapeutic signal** — Compound X
+  may be **suppressing tumour-promoting ECM remodelling** and reducing
+  the immunosuppressive tumour microenvironment.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=MXRA5
+
+---
+
+### 3. `ITGBL1` — Integrin Subunit Beta Like 1
+
+- **Full name:** Integrin Beta-Like Protein 1
+- **Function:** A protein structurally related to integrin beta subunits that:
+  - **Modulates integrin-mediated cell adhesion** to ECM components
+  - **Promotes cancer metastasis** — upregulated in colorectal and ovarian cancers,
+    facilitates epithelial-mesenchymal transition (EMT)
+  - **Activates TGF-β signalling** — a key pro-fibrotic and pro-tumour pathway
+  - **Inhibits Wnt signalling** in some contexts
+- **Relevance:** Its downregulation suggests Compound X may be
+  **reducing cancer cell invasion and metastatic potential** by disrupting
+  integrin-mediated adhesion signalling.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=ITGBL1
+
+---
+
+### 4. `HBB` — Haemoglobin Subunit Beta
+
+- **Full name:** Haemoglobin Subunit Beta (Beta-Globin)
+- **Function:** Encodes the **beta chain of adult haemoglobin**, the
+  oxygen-carrying protein in red blood cells. Key roles:
+  - **Oxygen transport** — binds O₂ cooperatively in a tetrameric complex
+    with alpha-globin subunits
+  - **Disease relevance:** Mutations cause **sickle cell anaemia** (HbS),
+    **beta-thalassaemia**, and other haemoglobinopathies
+  - Also expressed at low levels in non-erythroid tissues where it may
+    function in **oxidative stress protection**
+- **Relevance:** HBB downregulation in a diseased cell line context may
+  indicate **altered oxygen metabolism or haem biosynthesis** in cells
+  responding to Compound X.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=HBB
+
+---
+
+### 5. `APCDD1L` — APC Down-Regulated 1 Like
+
+- **Full name:** Adenomatous Polyposis Coli Down-Regulated 1 Like
+- **Function:** A transmembrane protein that:
+  - **Inhibits the Wnt signalling pathway** — by promoting degradation of
+    Wnt pathway components
+  - **Regulates hair follicle development** — mutations cause
+    Hereditary Hypotrichosis Simplex (hair loss disorder)
+  - **Tumour suppressor activity** — downregulated in colorectal cancers
+    where Wnt signalling is hyperactivated
+- **Relevance:** Downregulation of APCDD1L appears counterintuitive for a
+  tumour suppressor, but may reflect **cell-type-specific Wnt pathway
+  rebalancing** as part of Compound X's mechanism of action.
+- **GeneCards:** https://www.genecards.org/cgi-bin/carddisp.pl?gene=APCDD1L
+
+---
+
+# 10. Summary Statistics & Final Table
+
+```{r summary-tables}
+# ── Full summary of differentially expressed genes ───────────
+cat("=== DIFFERENTIAL EXPRESSION SUMMARY ===\n")
+cat(sprintf("Total genes analysed       : %d\n", nrow(rnaseq_clean)))
+cat(sprintf("Upregulated   (FC>1, p<0.01): %d\n",
+            sum(rnaseq_clean$Expression == "Upregulated")))
+cat(sprintf("Downregulated (FC<-1, p<0.01): %d\n",
+            sum(rnaseq_clean$Expression == "Downregulated")))
+cat(sprintf("Not significant             : %d\n",
+            sum(rnaseq_clean$Expression == "Not Significant")))
+
+# ── Top 5 up and down in a combined table ────────────────────
+cat("\n=== TOP 5 UPREGULATED ===\n")
+print(head(upregulated %>%
+             select(Gene, log2FoldChange, pvalue), 5))
+
+cat("\n=== TOP 5 DOWNREGULATED ===\n")
+print(head(downregulated %>%
+             select(Gene, log2FoldChange, pvalue), 5))
+```
+
+---
+
+# 11. Enhanced Volcano Plot with All Labels
+
+```{r enhanced-volcano, fig.height=9}
+# ── Final enhanced volcano with both up and down top genes ───
+ggplot(rnaseq_clean,
+       aes(x     = log2FoldChange,
+           y     = neg_log10_pval,
+           color = Expression)) +
+  geom_point(alpha = 0.45, size = 1.4) +
+  geom_vline(xintercept = c(-1, 1),
+             linetype = "dashed", color = "grey20", linewidth = 0.6) +
+  geom_hline(yintercept = -log10(0.01),
+             linetype = "dashed", color = "grey20", linewidth = 0.6) +
+  ggrepel::geom_label_repel(
+    data        = top_genes,
+    aes(label   = Gene),
+    size        = 3.2,
+    fontface    = "bold",
+    fill        = "white",
+    alpha       = 0.85,
+    box.padding = 0.5,
+    max.overlaps = 20,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(
+    values = c(
+      "Upregulated"     = "#C62828",
+      "Downregulated"   = "#1565C0",
+      "Not Significant" = "grey70"
+    )
+  ) +
+  # Annotate counts in each quadrant
+  annotate("text",
+           x =  max(rnaseq_clean$log2FoldChange, na.rm=TRUE) * 0.7,
+           y =  max(rnaseq_clean$neg_log10_pval, na.rm=TRUE) * 0.92,
+           label = paste0(sum(rnaseq_clean$Expression=="Upregulated"),
+                          " Upregulated"),
+           color = "#C62828", fontface = "bold", size = 4) +
+  annotate("text",
+           x =  min(rnaseq_clean$log2FoldChange, na.rm=TRUE) * 0.7,
+           y =  max(rnaseq_clean$neg_log10_pval, na.rm=TRUE) * 0.92,
+           label = paste0(sum(rnaseq_clean$Expression=="Downregulated"),
+                          " Downregulated"),
+           color = "#1565C0", fontface = "bold", size = 4) +
+  labs(
+    title    = "Volcano Plot — RNA-seq Differential Expression",
+    subtitle = "Diseased Cell Line vs Diseased + Compound X  |  Top 5 Up & Down genes labelled",
+    x        = "Log₂ Fold Change",
+    y        = "-log₁₀(p-value)",
+    color    = "Expression Status",
+    caption  = "Thresholds: |Log2FC| > 1 and p-value < 0.01  |  Source: Turner (2015)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15),
+    plot.subtitle    = element_text(color = "grey50", size = 11),
+    legend.position  = "bottom",
+    panel.grid.minor = element_blank()
+  )
+```
+
+---
+
+# 12. Overall Biological Conclusions
+
+> **Upregulated genes** — Compound X activates genes involved in:
+> - **Apoptosis** (`DTHD1`, `EMILIN2`) → the treatment is re-enabling
+>   programmed cell death in diseased cells that had evaded it
+> - **Structural remodelling** (`ACTC1`) → cytoskeletal reorganisation
+>   as part of the cellular response
+> - **Cell cycle regulation** (`SPDYE7P`) → potential modulation of
+>   proliferative capacity
+
+> **Downregulated genes** — Compound X suppresses genes involved in:
+> - **Tumour ECM remodelling** (`MXRA5`, `ITGBL1`) → reduced invasion
+>   and metastatic potential
+> - **Inflammation** (`CRISPLD2`) → dampening of inflammatory signalling
+> - **Wnt pathway** (`APCDD1L`) → pathway rebalancing in treated cells
+> - **Oxygen metabolism** (`HBB`) → altered metabolic state
+
+> **Overall conclusion:**
+> Compound X appears to act through a **dual mechanism** — simultaneously
+> activating pro-apoptotic and structural repair pathways while suppressing
+> tumour-promoting ECM remodelling and inflammatory signals. This pattern
+> is consistent with a compound that **re-sensitises diseased cells to
+> normal regulatory control** — a hallmark of effective therapeutic intervention.
+
+---
+
+*End of Task 2.6 — Transcriptomics RNA-seq Differential Expression Analysis*
